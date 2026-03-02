@@ -1,15 +1,15 @@
-﻿using Amazon.DynamoDBv2.DataModel;
+using Amazon.DynamoDBv2.DataModel;
 
-namespace UrlShortener.Api.Models;
+namespace UrlShortener.Infrastructure.Persistence.Models;
 
 [DynamoDBTable("Urls")]
-public class Url
+public class ShortUrlItem
 {
     [DynamoDBHashKey]
-    public string ShortCode { get; set; } = null!;
+    public string ShortCode { get; set; } = string.Empty;
 
     [DynamoDBProperty]
-    public string OriginalUrl { get; set; } = null!;
+    public string OriginalUrl { get; set; } = string.Empty;
 
     [DynamoDBProperty]
     public string? UserId { get; set; }
@@ -21,5 +21,5 @@ public class Url
     public bool IsActive { get; set; } = true;
 
     [DynamoDBProperty]
-    public long TotalClicks { get; set; } = 0;
+    public long TotalClicks { get; set; }
 }
