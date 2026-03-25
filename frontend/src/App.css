@@ -1,0 +1,110 @@
+/* ===== Container ===== */
+.container {
+  background-color: #ffffff;
+  padding: 30px 35px;
+  border-radius: 12px;
+  box-shadow: 0 12px 25px rgba(0, 0, 0, 0.2);
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+/* Class mới để căn giữa container chính */
+.main-container {
+  margin-top: 80px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ===== Title ===== */
+h1 {
+  color: #333;
+  font-size: 28px;
+  margin-bottom: 25px;
+}
+
+/* ===== Form ===== */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+input[type="url"] {
+  padding: 12px 15px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+input[type="url"]:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 8px rgba(102, 126, 234, 0.4);
+}
+
+button {
+  padding: 12px 15px;
+  font-size: 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  color: white;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+button:hover {
+  background: linear-gradient(90deg, #5a67d8, #6b46c1);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* ===== Error message ===== */
+.error {
+  color: #e53e3e;
+  font-weight: 500;
+  margin-top: 8px;
+}
+
+/* ===== Result ===== */
+.result {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #f7f7f7;
+  border-radius: 10px;
+  word-wrap: break-word;
+  transition: all 0.3s ease;
+}
+
+.result a {
+  color: #667eea;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.result a:hover {
+  text-decoration: underline;
+}
+
+/* ===== Fade In Animation ===== */
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== History Table Container ===== */
+.history-container {
+  max-width: 1300px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
