@@ -1,0 +1,39 @@
+# Development override - automatically loaded by docker-compose
+# Usage: docker-compose up (this file is auto-merged)
+
+services:
+  api:
+    build:
+      target: build
+    volumes:
+      - ./backend:/src
+      - ~/.aws:/root/.aws:ro
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    command: >
+      sh -c "dotnet watch run --project src/UrlShortener.Api/UrlShortener.Api.csproj --urls http://+:8080"
+
+  frontend:
+    build:
+      target: build
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/build
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000
+      - WDS_SOCKET_PORT=0
+      - CHOKIDAR_USEPOLLING=true
+    command: npm start
+    stdin_open: true
+    tty: true
+
+  localstack:
+    volumes:
+      - ./localstack-init:/etc/localstack/init/ready.d
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"

@@ -1,0 +1,43 @@
+# Build outputs
+bin/
+obj/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Test results
+TestResults/
+*.trx
+coverage/
+
+# Logs
+*.log
+
+# User secrets
+*.user
+*.userosscache
+
+# NuGet
+packages/
+*.nupkg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+appsettings.Development.json
+appsettings.Local.json
+launchSettings.json

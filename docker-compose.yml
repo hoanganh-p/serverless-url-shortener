@@ -1,0 +1,76 @@
+services:
+  # Backend API
+  api:
+    build:
+      context: ./backend
+      target: runtime
+    container_name: url-shortener-api
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - AllowedOrigins=http://localhost:3000
+      - BaseUrl=http://localhost:5000
+      - JwtSettings__Secret=${JWT_SECRET:-your-super-secret-key-at-least-32-chars-long}
+      - JwtSettings__Issuer=url-shortener-api
+      - JwtSettings__Audience=url-shortener-client
+      - JwtSettings__ExpirationInMinutes=60
+      - AWS_REGION=${AWS_REGION:-ap-southeast-1}
+      - AWS_PROFILE=${AWS_PROFILE:-hoanganh}
+    networks:
+      - url-shortener-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Frontend React + Nginx
+  frontend:
+    build:
+      context: ./frontend
+    container_name: url-shortener-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000
+    networks:
+      - url-shortener-net
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional: LocalStack for local DynamoDB
+  localstack:
+    image: localstack/localstack:2.3.0
+    container_name: url-shortener-localstack
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=dynamodb
+      - DEBUG=1
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - "./localstack-init:/etc/localstack/init/ready.d"
+      - "localstack-data:/var/lib/localstack"
+    networks:
+      - url-shortener-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  url-shortener-net:
+    driver: bridge
+
+volumes:
+  localstack-data:
