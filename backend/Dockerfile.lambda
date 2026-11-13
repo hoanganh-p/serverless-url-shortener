@@ -1,0 +1,44 @@
+# ============================================================
+# Dockerfile for AWS Lambda (Container Image)
+# Multi-stage build optimized for Lambda
+# ============================================================
+
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Copy csproj files first for better layer caching
+COPY UrlShortener.sln .
+COPY src/UrlShortener.Api/UrlShortener.Api.csproj src/UrlShortener.Api/
+COPY src/UrlShortener.Application/UrlShortener.Application.csproj src/UrlShortener.Application/
+COPY src/UrlShortener.Domain/UrlShortener.Domain.csproj src/UrlShortener.Domain/
+COPY src/UrlShortener.Infrastructure/UrlShortener.Infrastructure.csproj src/UrlShortener.Infrastructure/
+COPY tests/UrlShortener.UnitTests/UrlShortener.UnitTests.csproj tests/UrlShortener.UnitTests/
+
+RUN dotnet restore UrlShortener.sln
+
+# Copy source and build
+COPY . .
+RUN dotnet publish src/UrlShortener.Api/UrlShortener.Api.csproj -c Release -o /app/publish --no-restore
+
+# Runtime stage - Use AWS Lambda base image for .NET
+FROM public.ecr.aws/lambda/dotnet:10
+
+# Set working directory
+WORKDIR /var/task
+
+# Copy published app
+COPY --from=build /app/publish .
+
+# Install AWS X-Ray daemon (optional, for tracing)
+# USER root
+# RUN yum install -y https://s3.dualstack.us-east-1.amazonaws.com/aws-xray-assets.us-east-1/xray-daemon/aws-xray-daemon-3.x.rpm && yum clean all
+# USER 1000
+
+# Set entry point for Lambda
+# The handler format for ASP.NET Core on Lambda is: AssemblyName::Namespace.ClassName::MethodName
+# For minimal APIs with Lambda.AspNetCoreServer, use the function handler
+ENTRYPOINT ["/lambda-entrypoint.sh"]
+
+# Default command (can be overridden)
+CMD ["UrlShortener.Api::UrlShortener.Api.LambdaEntryPoint::FunctionHandlerAsync"]

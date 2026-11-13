@@ -17,13 +17,13 @@ public class DynamoDbUrlRepository : IUrlRepository
 
     public async Task<ShortUrl?> GetByShortCodeAsync(string shortCode)
     {
-        var item = await _db.LoadAsync<ShortUrlItem>(shortCode);
+        var item = await _db.LoadAsync<ShortUrlItem>(shortCode, new DynamoDBOperationConfig { OverrideTableName = ShortUrlItem.TableName });
         return item?.ToDomain();
     }
 
     public Task AddAsync(ShortUrl url)
     {
-        return _db.SaveAsync(url.ToItem());
+        return _db.SaveAsync(url.ToItem(), new DynamoDBOperationConfig { OverrideTableName = ShortUrlItem.TableName });
     }
 
     public async Task<IEnumerable<ShortUrl>> GetAllForUserAsync(string userId)
@@ -33,7 +33,7 @@ public class DynamoDbUrlRepository : IUrlRepository
             new ScanCondition(nameof(ShortUrlItem.UserId), ScanOperator.Equal, userId)
         };
 
-        var search = _db.ScanAsync<ShortUrlItem>(conditions);
+        var search = _db.ScanAsync<ShortUrlItem>(conditions, new DynamoDBOperationConfig { OverrideTableName = ShortUrlItem.TableName });
         var items = await search.GetRemainingAsync();
 
         return items
@@ -43,11 +43,11 @@ public class DynamoDbUrlRepository : IUrlRepository
 
     public Task UpdateAsync(ShortUrl url)
     {
-        return _db.SaveAsync(url.ToItem());
+        return _db.SaveAsync(url.ToItem(), new DynamoDBOperationConfig { OverrideTableName = ShortUrlItem.TableName });
     }
 
     public Task DeleteAsync(ShortUrl url)
     {
-        return _db.DeleteAsync(url.ToItem());
+        return _db.DeleteAsync(url.ToItem(), new DynamoDBOperationConfig { OverrideTableName = ShortUrlItem.TableName });
     }
 }

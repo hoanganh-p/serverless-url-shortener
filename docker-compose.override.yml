@@ -13,6 +13,8 @@ services:
       - AWS_ENDPOINT_URL=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
+      - DYNAMODB_USERS_TABLE=Users
+      - DYNAMODB_URLS_TABLE=ShortUrls
     command: >
       sh -c "dotnet watch run --project src/UrlShortener.Api/UrlShortener.Api.csproj --urls http://+:8080"
 

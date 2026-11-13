@@ -1,0 +1,501 @@
+# ============================================================
+# GitHub Actions CI/CD Pipeline
+# ============================================================
+
+name: CI/CD - URL Shortener
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'terraform/**'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'terraform/**'
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REPOSITORY: url-shortener-api
+  TERRAFORM_VERSION: 1.9.0
+
+permissions:
+  id-token: write    # Required for OIDC to AWS
+  contents: read     # Required for actions/checkout
+
+jobs:
+  # ============================================================
+  # 1. BACKEND TEST & BUILD
+  # ============================================================
+  backend-test:
+    name: Backend Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+
+      - name: Restore dependencies
+        run: dotnet restore UrlShortener.sln
+
+      - name: Build solution
+        run: dotnet build UrlShortener.sln --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test UrlShortener.sln --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: backend/**/test-results.trx
+
+      - name: Publish API project
+        run: dotnet publish src/UrlShortener.Api/UrlShortener.Api.csproj -c Release -o ./publish
+
+      - name: Upload publish artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-publish
+          path: backend/publish/
+          retention-days: 1
+
+  # ============================================================
+  # 2. FRONTEND TEST & BUILD
+  # ============================================================
+  frontend-test:
+    name: Frontend Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint --if-present
+
+      - name: Run tests
+        run: npm test -- --watchAll=false --coverage
+
+      - name: Build production
+        run: npm run build
+        env:
+          REACT_APP_API_URL: ${{ secrets.STAGING_API_URL }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/build/
+          retention-days: 1
+
+  # ============================================================
+  # 3. DOCKER BUILD & PUSH TO ECR
+  # ============================================================
+  docker-build:
+    name: Build & Push Docker Image
+    needs: [backend-test, frontend-test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        working-directory: ./backend
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+          # Also tag as latest for dev
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Output image URI
+        run: |
+          echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+        id: image
+
+    outputs:
+      image_uri: ${{ steps.image.outputs.IMAGE_URI }}
+
+  # ============================================================
+  # 4. TERRAFORM PLAN (DEV)
+  # ============================================================
+  terraform-plan-dev:
+    name: Terraform Plan (Dev)
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="lambda_image_uri=${{ needs.docker-build.outputs.image_uri }}" \
+            -out=tfplan
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-dev
+          path: terraform/environments/dev/tfplan
+          retention-days: 1
+
+      - name: Post Plan Summary
+        run: |
+          echo "### Terraform Plan (Dev) 📋" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 5. TERRAFORM APPLY (DEV) - Auto-approve on main
+  # ============================================================
+  terraform-apply-dev:
+    name: Terraform Apply (Dev)
+    needs: terraform-plan-dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/dev
+    environment: dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-dev
+          path: .
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Output Deployment Info
+        run: |
+          echo "### Dev Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "API URL: $(terraform output -raw api_base_url)" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend URL: $(terraform output -raw frontend_url)" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 6. TERRAFORM PLAN (STAGING) - Manual approval
+  # ============================================================
+  terraform-plan-staging:
+    name: Terraform Plan (Staging)
+    needs: terraform-apply-dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="lambda_image_uri=${{ needs.docker-build.outputs.image_uri }}" \
+            -out=tfplan
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-staging
+          path: terraform/environments/staging/tfplan
+          retention-days: 1
+
+      - name: Post Plan Summary
+        run: |
+          echo "### Terraform Plan (Staging) 📋" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 7. TERRAFORM APPLY (STAGING) - Requires manual approval
+  # ============================================================
+  terraform-apply-staging:
+    name: Terraform Apply (Staging)
+    needs: terraform-plan-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/staging
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-staging
+          path: .
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Sync Frontend to S3
+        run: |
+          aws s3 sync ${{ github.workspace }}/frontend/build/ s3://$(terraform output -raw s3_bucket_name) --delete \
+            --cache-control "public, max-age=31536000, immutable" --exclude "index.html" --exclude "*.json"
+          aws s3 sync ${{ github.workspace }}/frontend/build/ s3://$(terraform output -raw s3_bucket_name) \
+            --cache-control "public, max-age=0, must-revalidate" --include "index.html" --include "*.json"
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id $(terraform output -raw cloudfront_distribution_id) \
+            --paths "/*"
+
+      - name: Output Deployment Info
+        run: |
+          echo "### Staging Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "API URL: $(terraform output -raw custom_api_url)" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend URL: $(terraform output -raw custom_frontend_url)" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 8. TERRAFORM PLAN (PROD) - Manual approval
+  # ============================================================
+  terraform-plan-prod:
+    name: Terraform Plan (Production)
+    needs: terraform-apply-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/prod
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="lambda_image_uri=${{ needs.docker-build.outputs.image_uri }}" \
+            -out=tfplan
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-prod
+          path: terraform/environments/prod/tfplan
+          retention-days: 1
+
+      - name: Post Plan Summary
+        run: |
+          echo "### Terraform Plan (Production) 📋" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # 9. TERRAFORM APPLY (PROD) - Requires manual approval
+  # ============================================================
+  terraform-apply-prod:
+    name: Terraform Apply (Production)
+    needs: terraform-plan-prod
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ./terraform/environments/prod
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-prod
+          path: .
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Sync Frontend to S3
+        run: |
+          aws s3 sync ${{ github.workspace }}/frontend/build/ s3://$(terraform output -raw s3_bucket_name) --delete \
+            --cache-control "public, max-age=31536000, immutable" --exclude "index.html" --exclude "*.json"
+          aws s3 sync ${{ github.workspace }}/frontend/build/ s3://$(terraform output -raw s3_bucket_name) \
+            --cache-control "public, max-age=0, must-revalidate" --include "index.html" --include "*.json"
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id $(terraform output -raw cloudfront_distribution_id) \
+            --paths "/*"
+
+      - name: Output Deployment Info
+        run: |
+          echo "### Production Deployment Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "API URL: $(terraform output -raw custom_api_url)" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend URL: $(terraform output -raw custom_frontend_url)" >> $GITHUB_STEP_SUMMARY
+          echo "Dashboard: https://${{ env.AWS_REGION }}.console.aws.amazon.com/cloudwatch/home?region=${{ env.AWS_REGION }}#dashboards:name=$(terraform output -raw monitoring_dashboard)" >> $GITHUB_STEP_SUMMARY

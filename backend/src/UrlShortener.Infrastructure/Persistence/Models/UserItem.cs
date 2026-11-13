@@ -2,8 +2,9 @@ using Amazon.DynamoDBv2.DataModel;
 
 namespace UrlShortener.Infrastructure.Persistence.Models;
 
-[DynamoDBTable("Users")]
 public class UserItem
+{
+    public static string TableName { get; set; } = "Users";
 {
     [DynamoDBHashKey]
     public string UserId { get; set; } = string.Empty;

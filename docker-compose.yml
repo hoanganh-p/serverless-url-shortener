@@ -1,23 +1,32 @@
 services:
-  # Backend API
+  # Backend API - Lambda Container Image
   api:
     build:
       context: ./backend
-      target: runtime
+      dockerfile: Dockerfile
     container_name: url-shortener-api
     ports:
       - "5000:8080"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:8080
       - AllowedOrigins=http://localhost:3000
       - BaseUrl=http://localhost:5000
+      # JWT Secret (use strong secret in production, stored in AWS Secrets Manager)
       - JwtSettings__Secret=${JWT_SECRET:-your-super-secret-key-at-least-32-chars-long}
       - JwtSettings__Issuer=url-shortener-api
       - JwtSettings__Audience=url-shortener-client
       - JwtSettings__ExpirationInMinutes=60
-      - AWS_REGION=${AWS_REGION:-ap-southeast-1}
-      - AWS_PROFILE=${AWS_PROFILE:-hoanganh}
+      # DynamoDB table names (match Terraform naming convention)
+      - DYNAMODB_USERS_TABLE=url-shortener-dev-users
+      - DYNAMODB_URLS_TABLE=url-shortener-dev-urls
+      # AWS Configuration for LocalStack
+      - AWS_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      # X-Ray (optional)
+      - AWS_XRAY_DAEMON_ADDRESS=127.0.0.1:2000
     networks:
       - url-shortener-net
     healthcheck:
@@ -25,8 +34,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
+    depends_on:
+      localstack:
+        condition: service_healthy
 
   # Frontend React + Nginx
   frontend:
@@ -44,9 +56,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Optional: LocalStack for local DynamoDB
+  # LocalStack for local DynamoDB
   localstack:
-    image: localstack/localstack:2.3.0
+    image: localstack/localstack:3.5
     container_name: url-shortener-localstack
     ports:
       - "4566:4566"
@@ -66,7 +78,24 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+
+  # X-Ray Daemon (for local tracing)
+  xray-daemon:
+    image: public.ecr.aws/xray-daemon/aws-xray-daemon:latest
+    container_name: url-shortener-xray
+    ports:
+      - "2000:2000/udp"
+    environment:
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    networks:
+      - url-shortener-net
+    command: ["-o", "-b", "0.0.0.0:2000"]
+    profiles:
+      - tracing
 
 networks:
   url-shortener-net:

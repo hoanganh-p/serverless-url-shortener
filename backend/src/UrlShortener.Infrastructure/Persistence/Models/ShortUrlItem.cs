@@ -2,8 +2,9 @@ using Amazon.DynamoDBv2.DataModel;
 
 namespace UrlShortener.Infrastructure.Persistence.Models;
 
-[DynamoDBTable("Urls")]
 public class ShortUrlItem
+{
+    public static string TableName { get; set; } = "Urls";
 {
     [DynamoDBHashKey]
     public string ShortCode { get; set; } = string.Empty;
